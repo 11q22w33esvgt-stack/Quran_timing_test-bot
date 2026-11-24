@@ -1,0 +1,90 @@
+name: Align Archive timings (one-time, manual)
+
+# Produces PRELIMINARY ayah timings for the Archive Qatami recording. Posts nothing, touches no channel, no secrets needed.
+# Output = artifacts (small JSON). Nothing is validated by this workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      surahs:
+        description: "Surah numbers, e.g. '112' or '1-114' or '112,113,2'. Run a benchmark first: '112,108'."
+        default: "112,108"
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+    steps:
+      - id: m
+        env:
+          SURAHS: ${{ inputs.surahs }}
+        run: |
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import os, json
+          out = []
+          for part in os.environ["SURAHS"].replace(" ", "").split(","):
+              if "-" in part:
+                  a, b = part.split("-"); out += list(range(int(a), int(b) + 1))
+              elif part:
+                  out.append(int(part))
+          out = sorted(set(n for n in out if 1 <= n <= 114))
+          print("matrix=" + json.dumps({"surah": out}))
+          PY
+
+  align:
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 355          # GitHub hard limit is 360 per job
+    strategy:
+      fail-fast: false
+      max-parallel: 20            # free plan allows 20 concurrent jobs
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: whisper-small-v1
+      - run: pip install faster-whisper
+      - name: Align surah ${{ matrix.surah }}
+        run: python3 align_surah.py ${{ matrix.surah }}
+      - name: Benchmark line
+        if: always()
+        run: |
+          python3 - <<'PY' >> "$GITHUB_STEP_SUMMARY"
+          import json, glob
+          for p in glob.glob("out/*.json"):
+              r = json.load(open(p))
+              print(f"surah {r['surah']}: ok={r['ok']} audio={r['audio_seconds']}s compute={r['compute_seconds']}s "
+                    f"({r['compute_per_audio_second']} s per audio s, {r['cpus']} cpus) min score={min(r['asr_check_scores'] or [None])}")
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: timing-${{ matrix.surah }}
+          path: out/
+          retention-days: 30
+
+  merge:
+    needs: align
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: timing-*
+          path: all
+          merge-multiple: true
+      - run: python3 merge_timings.py "all/*.json"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: data-merged-PRELIMINARY
+          path: data.merged.json
+          retention-days: 30
