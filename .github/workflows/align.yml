@@ -15,6 +15,7 @@ permissions:
 jobs:
   plan:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     outputs:
       matrix: ${{ steps.m.outputs.matrix }}
     steps:
@@ -51,6 +52,11 @@ jobs:
         with:
           path: ~/.cache/huggingface
           key: whisper-small-v1
+      - name: Install ffmpeg
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+          ffmpeg -version | head -1
       - run: pip install faster-whisper
       - name: Align surah ${{ matrix.surah }}
         run: python3 align_surah.py ${{ matrix.surah }}
@@ -75,6 +81,7 @@ jobs:
     needs: align
     if: always()
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
